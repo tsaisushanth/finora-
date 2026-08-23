@@ -42,7 +42,7 @@ from analytics import (
 
 # Set Streamlit Page Config for Finora
 st.set_page_config(
-    page_title="Finora — Know where your money goes",
+    page_title="Finora",
     page_icon="💳",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -65,7 +65,7 @@ with st.sidebar:
     st.markdown("""
     <div class="brand-header">
         <div class="brand-logo">💳</div>
-        <h1 class="brand-title">Finora</h1>
+        <h1 class="brand-title" style="color: #063B3B !important;">Finora</h1>
     </div>
     <div class="brand-tagline">Know where your money goes.</div>
     """, unsafe_allow_html=True)

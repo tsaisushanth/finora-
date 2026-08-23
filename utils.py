@@ -103,14 +103,20 @@ def apply_custom_css():
         box-shadow: 0 4px 14px rgba(11, 41, 32, 0.22);
         flex-shrink: 0;
     }
-    /* Brand name: darkest possible on the cream — WCAG AA+ contrast */
-    .brand-title {
-        font-size: 2.05rem;
-        font-weight: 800;
-        letter-spacing: -0.6px;
-        color: #0B2920;
-        margin: 0;
-        line-height: 1.1;
+    /* Brand name: darkest teal on cream — WCAG AA+ contrast */
+    /* Triple-layered override: class, sidebar-scoped, and element targeting */
+    .brand-title,
+    h1.brand-title,
+    section[data-testid="stSidebar"] h1.brand-title,
+    section[data-testid="stSidebar"] .brand-header h1.brand-title,
+    section[data-testid="stSidebar"] .brand-header .brand-title {
+        font-size: 2.05rem !important;
+        font-weight: 800 !important;
+        letter-spacing: -0.6px !important;
+        color: #063B3B !important;
+        margin: 0 !important;
+        line-height: 1.1 !important;
+        -webkit-text-fill-color: #063B3B !important;
     }
     .brand-tagline {
         font-size: 0.9rem;
