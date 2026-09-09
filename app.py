@@ -10,6 +10,7 @@ from database import (
     delete_expense,
     get_wallet_balance,
     set_wallet_balance,
+    adjust_wallet_balance,
     add_money_transaction,
     lend_money,
     borrow_money,
@@ -21,7 +22,20 @@ from database import (
     get_wallet_transaction_history,
     DEFAULT_CATEGORIES,
     DEFAULT_PAYMENT_METHODS,
-    MONEY_SOURCES
+    MONEY_SOURCES,
+    get_current_user_id,
+    get_total_allocated_to_goals,
+    create_goal,
+    get_user_goals,
+    get_goal,
+    update_goal,
+    update_goal_status,
+    delete_goal,
+    add_goal_contribution,
+    remove_goal_contribution,
+    get_goal_transactions,
+    GOAL_CATEGORIES,
+    GOAL_PRIORITIES
 )
 from utils import (
     apply_custom_css,
@@ -30,7 +44,8 @@ from utils import (
     format_currency,
     format_transaction_type,
     get_category_icon,
-    get_greeting
+    get_greeting,
+    get_goal_category_icon
 )
 from analytics import (
     prepare_dataframe,
@@ -38,6 +53,15 @@ from analytics import (
     create_category_pie_chart,
     create_trend_chart,
     generate_spending_insights
+)
+from goals import (
+    calculate_goal_progress,
+    calculate_remaining_amount,
+    get_goal_summary,
+    generate_goal_insights,
+    render_goal_card,
+    render_goal_summary,
+    render_progress_bar
 )
 
 # Set Streamlit Page Config for Finora
@@ -57,6 +81,18 @@ apply_custom_css()
 # Session State Initialization for Navigation
 if "nav_choice" not in st.session_state:
     st.session_state.nav_choice = "🏠 Dashboard"
+
+# Bucket List session state keys
+if "show_create_goal" not in st.session_state:
+    st.session_state.show_create_goal = False
+if "goal_contrib_id" not in st.session_state:
+    st.session_state.goal_contrib_id = None
+if "goal_form_mode" not in st.session_state:
+    st.session_state.goal_form_mode = None
+if "goal_edit_id" not in st.session_state:
+    st.session_state.goal_edit_id = None
+if "goal_delete_id" not in st.session_state:
+    st.session_state.goal_delete_id = None
 
 # ----------------------------------------------------
 # SIDEBAR REDESIGN & BRANDING
@@ -80,6 +116,11 @@ with st.sidebar:
         st.session_state.nav_choice = "💳 Wallet"
         st.rerun()
 
+    st.markdown('<div class="sidebar-section-label">Goals</div>', unsafe_allow_html=True)
+    if st.button("🎯 Bucket List", use_container_width=True):
+        st.session_state.nav_choice = "🎯 Bucket List"
+        st.rerun()
+
     st.markdown('<div class="sidebar-section-label">Activity</div>', unsafe_allow_html=True)
     b_col1, b_col2 = st.columns(2)
     with b_col1:
@@ -97,6 +138,7 @@ with st.sidebar:
     wallet_summary = get_wallet_summary()
     avail_val = wallet_summary["available_wallet"]
     net_val = wallet_summary["net_worth"]
+    allocated_val = get_total_allocated_to_goals(get_current_user_id())
     
     st.markdown(f"""
     <div class="sidebar-summary-card">
@@ -104,6 +146,10 @@ with st.sidebar:
         <div class="sidebar-val-group">
             <div class="sidebar-val-label">Available Balance</div>
             <div class="sidebar-val-amount">{format_currency(avail_val)}</div>
+        </div>
+        <div class="sidebar-val-group">
+            <div class="sidebar-val-label">🎯 Allocated for Goals</div>
+            <div class="sidebar-val-amount" style="font-size: 1.15rem;">{format_currency(allocated_val)}</div>
         </div>
         <div class="sidebar-val-group" style="margin-bottom: 0;">
             <div class="sidebar-val-label">Net Worth</div>
@@ -274,6 +320,66 @@ if nav_choice == "🏠 Dashboard":
             </div>
             """, unsafe_allow_html=True)
 
+    # --- Your Goals Section on Dashboard (always visible) ---
+    user_id_dash = get_current_user_id()
+    dash_goals = get_user_goals(user_id_dash, status="Active")
+    if dash_goals:
+        st.markdown("---")
+        g_h_col, g_btn_col = st.columns([3.2, 1.2])
+        with g_h_col:
+            st.markdown("<h2 style='font-size: 1.45rem; font-weight: 800; color: #0B2920; margin-bottom: 14px; letter-spacing: -0.2px;'>🎯 Your Goals</h2>", unsafe_allow_html=True)
+        with g_btn_col:
+            if st.button("View All Goals →", use_container_width=True):
+                st.session_state.nav_choice = "🎯 Bucket List"
+                st.rerun()
+        for g in dash_goals[:3]:
+            g_icon = get_goal_category_icon(g["category"])
+            g_prog = calculate_goal_progress(g)
+            row_c, nav_c = st.columns([5, 1])
+            with row_c:
+                st.markdown(f"""
+                <div class="activity-row" style="cursor: default;">
+                    <div class="activity-left">
+                        <div class="activity-icon" style="font-size:1.2rem;">{g_icon}</div>
+                        <div>
+                            <div class="activity-desc">{g['name']}</div>
+                            <div class="activity-meta">{g['category']} · {format_currency(g['saved_amount'])} / {format_currency(g['target_amount'])}</div>
+                        </div>
+                    </div>
+                    <div style="text-align:right;">
+                        <div style="font-weight:800; color:#0B2920; font-size:1.15rem;">{g_prog:.0f}%</div>
+                        <div style="width:80px; height:8px; background:rgba(18,60,53,0.1); border-radius:20px; overflow:hidden; margin-top:4px;">
+                            <div style="width:{g_prog}%; height:100%; background:linear-gradient(90deg, #2C5E55 0%, #123C35 100%); border-radius:20px;"></div>
+                        </div>
+                    </div>
+                </div>""", unsafe_allow_html=True)
+            with nav_c:
+                if st.button("View", key=f"dash_goal_{g['id']}", use_container_width=True):
+                    st.session_state.nav_choice = "🎯 Bucket List"
+                    st.rerun()
+
+    # --- Savings Goals Analytics (integrated into dashboard analytics) ---
+    all_dash_goals = get_user_goals(user_id_dash)
+    if all_dash_goals:
+        active_count = sum(1 for g in all_dash_goals if g["status"] == "Active")
+        completed_count = sum(1 for g in all_dash_goals if g["status"] == "Completed")
+        total_saved_goals = sum(float(g["saved_amount"] or 0.0) for g in all_dash_goals if g["status"] != "Archived")
+        total_target_goals = sum(float(g["target_amount"] or 0.0) for g in all_dash_goals if g["status"] != "Archived")
+        completion_rate = (completed_count / max(1, len(all_dash_goals))) * 100
+        goal_share = (total_saved_goals / (summary["available_wallet"] + total_saved_goals) * 100) if (summary["available_wallet"] + total_saved_goals) > 0 else 0.0
+
+        st.markdown("---")
+        st.markdown("<h2 style='font-size: 1.45rem; font-weight: 800; color: #0B2920; margin-top: 10px; margin-bottom: 14px; letter-spacing: -0.2px;'>📚 Savings Goals</h2>", unsafe_allow_html=True)
+        gs1, gs2, gs3, gs4 = st.columns(4)
+        with gs1:
+            render_metric_tile("Total Saved", format_currency(total_saved_goals), "Toward goals", icon="🐷")
+        with gs2:
+            render_metric_tile("Completion Rate", f"{completion_rate:.0f}%", f"{completed_count} completed", icon="🏆")
+        with gs3:
+            render_metric_tile("Active Goals", f"{active_count}", f"{len(all_dash_goals)} total goals", icon="🎯")
+        with gs4:
+            render_metric_tile("Saved vs Wallet", f"{goal_share:.0f}%", "Of savings in goals", icon="💼")
+
 # ----------------------------------------------------
 # PAGE 2: ADD EXPENSE REDESIGN
 # ----------------------------------------------------
@@ -422,6 +528,435 @@ elif nav_choice == "📋 Expenses":
         )
 
 # ----------------------------------------------------
+# PAGE 5: BUCKET LIST (GOALS)
+# ----------------------------------------------------
+elif nav_choice == "🎯 Bucket List":
+    user_id = get_current_user_id()
+    goals = get_user_goals(user_id)
+    available_bal = get_wallet_balance()
+    allocated_bal = get_total_allocated_to_goals(user_id)
+    summary = get_goal_summary(goals)
+
+    # ---------------- Page Hero ----------------
+    st.markdown(f"""
+    <div class="goal-hero">
+        <div class="goal-hero-title">🎯 Bucket List</div>
+        <div class="goal-hero-sub">Turn the things you want into achievable financial goals.</div>
+        <div class="goal-hero-chip-row">
+            <span class="goal-hero-chip">💰 Wallet available: <b>{format_currency(available_bal)}</b></span>
+            <span class="goal-hero-chip">🎯 Allocated to goals: <b>{format_currency(allocated_bal)}</b></span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # ---------------- Empty State ----------------
+    if not goals:
+        st.markdown("""
+        <div class="empty-state-box">
+            <div class="empty-state-icon">🎯</div>
+            <div class="empty-state-title">Start Building Your Bucket List</div>
+            <div class="empty-state-desc">Turn your dreams into goals and track your progress. Create a goal, then save money toward it over time.</div>
+        </div>
+        """, unsafe_allow_html=True)
+        if st.button("✦ Create Your First Goal", use_container_width=True, type="primary"):
+            st.session_state.show_create_goal = True
+            st.rerun()
+    else:
+        # ---------------- Summary Stats ----------------
+        st.markdown(render_goal_summary(summary), unsafe_allow_html=True)
+
+        # Top priority + closest goal
+        c1, c2 = st.columns(2)
+        with c1:
+            if summary["top_priority"]:
+                tp = summary["top_priority"]
+                priority_icon = {"High": "🔥", "Medium": "⭐", "Low": "🍃"}.get(tp["priority"], "⭐")
+                st.markdown(f"""
+                <div class="goal-summary-card">
+                    <div class="goal-summary-label">{priority_icon} Top Priority Goal</div>
+                    <div class="goal-card-name">{get_goal_category_icon(tp['category'])} {tp['name']}</div>
+                    <div class="goal-summary-value">{calculate_goal_progress(tp):.0f}%</div>
+                    <div class="goal-summary-sub">{format_currency(tp['saved_amount'])} / {format_currency(tp['target_amount'])}</div>
+                </div>""", unsafe_allow_html=True)
+        with c2:
+            if summary["closest_goal"]:
+                cg = summary["closest_goal"]
+                st.markdown(f"""
+                <div class="goal-summary-card">
+                    <div class="goal-summary-label">🏁 Closest to Completion</div>
+                    <div class="goal-card-name">{get_goal_category_icon(cg['category'])} {cg['name']}</div>
+                    <div class="goal-summary-value">{calculate_goal_progress(cg):.0f}%</div>
+                    <div class="goal-summary-sub">{format_currency(calculate_remaining_amount(cg))} to go</div>
+                </div>""", unsafe_allow_html=True)
+                c2_pbar = render_progress_bar(calculate_goal_progress(cg), show_caption=False)
+                st.markdown(c2_pbar, unsafe_allow_html=True)
+
+        st.write("")
+
+        # ---------------- Toolbar: heading + create button ----------------
+        tool_l, tool_r = st.columns([3, 1.4])
+        with tool_l:
+            st.markdown("<h2 style='font-size: 1.45rem; font-weight: 800; color: #14201B; margin-top: 8px; letter-spacing: -0.2px;'>My Goals</h2>", unsafe_allow_html=True)
+        with tool_r:
+            if st.button("✦ Create New Goal", use_container_width=True, type="primary"):
+                st.session_state.show_create_goal = True
+                st.rerun()
+
+        # ---------------- Filters + Sort ----------------
+        f_c1, f_c2, f_c3, f_c4 = st.columns(4)
+        with f_c1:
+            status_filter = st.selectbox("Status", ["All", "Active", "Paused", "Completed", "Archived"], key="goal_status_filter")
+        with f_c2:
+            cat_opts_g = ["All"] + [f"{get_goal_category_icon(c)} {c}" for c in GOAL_CATEGORIES]
+            cat_g = st.selectbox("Category", cat_opts_g, key="goal_cat_filter")
+            cat_filter_g = "All" if cat_g == "All" else cat_g.split(" ", 1)[1]
+        with f_c3:
+            prio_filter = st.selectbox("Priority", ["All"] + GOAL_PRIORITIES, key="goal_prio_filter")
+        with f_c4:
+            sort_choice = st.selectbox(
+                "Sort by",
+                ["Recently created", "Highest priority", "Closest to completion", "Target date"],
+                key="goal_sort"
+            )
+
+        _prio_rank = {"High": 3, "Medium": 2, "Low": 1}
+        if sort_choice == "Highest priority":
+            goals = sorted(goals, key=lambda g: _prio_rank.get(g.get("priority"), 0), reverse=True)
+        elif sort_choice == "Closest to completion":
+            goals = sorted(goals, key=lambda g: calculate_goal_progress(g), reverse=True)
+        elif sort_choice == "Target date":
+            goals = sorted(goals, key=lambda g: (0 if (g.get("target_date") or "") else 1, g.get("target_date") or ""))
+        else:
+            goals = sorted(goals, key=lambda g: (g.get("created_at") or ""), reverse=True)
+
+        filtered_goals = [
+            g for g in goals
+            if (status_filter == "All" or g["status"] == status_filter)
+            and (cat_filter_g == "All" or g["category"] == cat_filter_g)
+            and (prio_filter == "All" or g["priority"] == prio_filter)
+        ]
+
+        # ---------------- Goal Cards Grid ----------------
+        if not filtered_goals:
+            st.markdown("""
+            <div class="empty-state-box">
+                <div class="empty-state-icon">🔎</div>
+                <div class="empty-state-title">No goals match your filters</div>
+                <div class="empty-state-desc">Try adjusting the status, category, or priority filter.</div>
+            </div>""", unsafe_allow_html=True)
+        else:
+            st.markdown(
+                "<div style='font-size: 0.95rem; color: #42504A; margin-bottom: 12px;'>"
+                f"Showing <b style='color:#14201B;'>{len(filtered_goals)}</b> goal{'s' if len(filtered_goals) != 1 else ''}"
+                "</div>",
+                unsafe_allow_html=True
+            )
+            cols = st.columns(2)
+            for idx, goal in enumerate(filtered_goals):
+                col = cols[idx % 2]
+                with col:
+                    st.markdown(render_goal_card(goal), unsafe_allow_html=True)
+                    st.caption("Goal allocation moves money from your available wallet.")
+
+                    # Actions
+                    status_g = goal["status"]
+
+                    act1, act2 = st.columns(2)
+                    with act1:
+                        if status_g in ("Active", "Paused"):
+                            if st.button("➕ Add Money", key=f"gm_{goal['id']}", use_container_width=True, type="primary"):
+                                st.session_state.goal_contrib_id = goal["id"]
+                                st.session_state.goal_form_mode = "contribute"
+                                st.rerun()
+                        else:
+                            st.markdown(f"<div style='font-size: 0.9rem; color: #825500; background:#FFF7E0; border:1px solid #FFE6A1; border-radius:8px; padding:7px 10px; text-align:center; font-weight:700;'>{get_goal_category_icon(goal['category'])} Kept in history</div>", unsafe_allow_html=True)
+                    with act2:
+                        if st.button("✏️ Edit", key=f"ge_{goal['id']}", use_container_width=True):
+                            st.session_state.goal_edit_id = goal["id"]
+                            st.rerun()
+
+                    act3, act4 = st.columns(2)
+                    with act3:
+                        if status_g == "Active":
+                            if st.button("⏸️ Pause", key=f"gpu_{goal['id']}", use_container_width=True):
+                                update_goal_status(goal["id"], "Paused")
+                                st.rerun()
+                        elif status_g == "Paused":
+                            if st.button("▶️ Resume", key=f"gpu_{goal['id']}", use_container_width=True):
+                                update_goal_status(goal["id"], "Active")
+                                st.rerun()
+                        elif status_g == "Completed":
+                            if st.button("📦 Archive", key=f"ga_{goal['id']}", use_container_width=True):
+                                update_goal_status(goal["id"], "Archived")
+                                st.rerun()
+                        else:
+                            st.markdown(f"<div style='font-size:0.95rem; color:#0F6F42; font-weight:800; background:#EDF8F1; border:1px solid #A9D6BE; border-radius:8px; padding:7px 10px; text-align:center;'>✓ Done</div>", unsafe_allow_html=True)
+                    with act4:
+                        if status_g in ("Active", "Paused"):
+                            if st.button("🏁 Mark Completed", key=f"gc_{goal['id']}", use_container_width=True):
+                                update_goal_status(goal["id"], "Completed")
+                                st.success(f"🎉 Goal '{goal['name']}' marked as completed!")
+                                st.balloons()
+                                st.rerun()
+                        else:
+                            if st.button("🗑️ Delete", key=f"gd_{goal['id']}", use_container_width=True):
+                                st.session_state.goal_delete_id = goal["id"]
+                                st.rerun()
+
+                    # Goal contribution history (collapsible)
+                    with st.expander(f"📜 History — {goal['name']}"):
+                        tx_list = get_goal_transactions(goal["id"])
+                        total_saved = sum(float(t["amount"]) for t in tx_list)
+                        if not tx_list:
+                            st.caption("No contributions yet.")
+                        else:
+                            st.markdown(f"**Total Saved: {format_currency(total_saved)}**")
+                            for tx in tx_list:
+                                h1, h2, h3, h4 = st.columns([1.6, 1.6, 2.4, 0.8])
+                                with h1:
+                                    st.write(tx["transaction_date"])
+                                with h2:
+                                    st.markdown(f"<span style='color:#0F6F42; font-weight:800;'>+ {format_currency(tx['amount'])}</span>", unsafe_allow_html=True)
+                                with h3:
+                                    st.caption(tx["note"] if tx["note"] else (tx["source"] or "-"))
+                                with h4:
+                                    if st.button("↩️", key=f"rx_{tx['id']}", help="Reverse this contribution"):
+                                        if remove_goal_contribution(goal["id"], user_id, tx["id"]):
+                                            st.toast(f"Reversed {format_currency(tx['amount'])}. Wallet balance restored.")
+                                            st.rerun()
+                                        else:
+                                            st.error("Could not reverse this contribution.")
+
+                    st.markdown("---")
+        st.write("")
+
+    # ---------------- Create Goal Modal/Form ----------------
+    if st.session_state.get("show_create_goal", False):
+        st.markdown("<div class='form-card'>", unsafe_allow_html=True)
+        st.markdown("<h3 style='margin-bottom: 16px; color: #123C35; font-weight: 800;'>✦ Create a New Goal</h3>", unsafe_allow_html=True)
+        with st.form("create_goal_form", clear_on_submit=True):
+            g_col1, g_col2 = st.columns(2)
+            with g_col1:
+                goal_name = st.text_input("Goal Name *", placeholder="e.g. New Phone, Trip to Goa")
+                goal_target = st.number_input("Target Amount (₹) *", min_value=0.0, step=500.0, format="%.2f")
+                cat_opts_new = [f"{get_goal_category_icon(c)} {c}" for c in GOAL_CATEGORIES]
+                cat_fmt = st.selectbox("Category *", cat_opts_new)
+                goal_category = cat_fmt.split(" ", 1)[1]
+            with g_col2:
+                goal_priority = st.selectbox("Priority *", GOAL_PRIORITIES, index=1)
+                goal_date = st.date_input("Target Date (Optional)", value=None)
+                goal_desc = st.text_area("Description / Notes (Optional)", placeholder="Why this goal matters...", height=90)
+            goal_date_str = goal_date.strftime("%Y-%m-%d") if goal_date else None
+
+            b1, b2 = st.columns(2)
+            with b1:
+                submitted = st.form_submit_button("✦ Create Goal", use_container_width=True, type="primary")
+            with b2:
+                cancelled = st.form_submit_button("✖ Cancel", use_container_width=True)
+                if cancelled:
+                    st.session_state.show_create_goal = False
+                    st.rerun()
+
+            if submitted:
+                if not goal_name.strip():
+                    st.error("⚠️ Goal name cannot be empty.")
+                elif goal_target <= 0:
+                    st.error("⚠️ Target amount must be greater than ₹0.")
+                else:
+                    create_goal(
+                        user_id=user_id,
+                        name=goal_name,
+                        target_amount=float(goal_target),
+                        category=goal_category,
+                        priority=goal_priority,
+                        target_date=goal_date_str,
+                        description=goal_desc
+                    )
+                    st.success("🎯 Goal created! Now start saving toward it.")
+                    st.session_state.show_create_goal = False
+                    st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    # ---------------- Contribute Money Modal/Form ----------------
+    if st.session_state.get("goal_form_mode") == "contribute" and st.session_state.get("goal_contrib_id"):
+        contrib_goal = get_goal(st.session_state["goal_contrib_id"])
+        if contrib_goal:
+            st.markdown("<div class='form-card'>", unsafe_allow_html=True)
+            st.markdown(f"<h3 style='margin-bottom: 12px; color: #123C35; font-weight: 800;'>➕ Add Money to <span style='color:#14201B;'>{contrib_goal['name']}</span></h3>", unsafe_allow_html=True)
+
+            # Current progress preview
+            curr_progress = calculate_goal_progress(contrib_goal)
+            st.markdown(f"""
+            <div style="background:#F4F6F4; border:1px solid #E4E9E6; border-radius:12px; padding:14px 16px; margin-bottom:16px;">
+                <div style="font-size:0.85rem; color:#42504A; margin-bottom:6px;"><b style="color:#14201B;">Current Progress</b></div>
+                <div style="font-size:1.35rem; font-weight:800; color:#14201B; margin-bottom:8px;">
+                    {format_currency(contrib_goal['saved_amount'])} <span style="font-size:0.95rem; color:#56635D;">/ {format_currency(contrib_goal['target_amount'])}</span>
+                </div>
+                {render_progress_bar(curr_progress)}
+            </div>
+            """, unsafe_allow_html=True)
+
+            st.markdown(f"<p style='color:#42504A; font-weight:600;'>Wallet available: <span style='color:#0C6353; font-weight:800;'>{format_currency(available_bal)}</span></p>", unsafe_allow_html=True)
+            with st.form("contribute_goal_form"):
+                cg_col1, cg_col2 = st.columns(2)
+                with cg_col1:
+                    contrib_amt = st.number_input("Amount (₹) *", min_value=0.0, step=100.0, format="%.2f")
+                with cg_col2:
+                    contrib_date = st.date_input("Date *", value=datetime.date.today())
+                source_sel = st.selectbox("Source / Wallet *", ["Wallet"] + MONEY_SOURCES)
+                contrib_note = st.text_input("Note (Optional)", placeholder="e.g. Saved from this month's allowance")
+                max_contrib = float(contrib_goal["target_amount"]) - float(contrib_goal["saved_amount"])
+
+                cb1, cb2 = st.columns(2)
+                with cb1:
+                    submitted_contrib = st.form_submit_button("➜ Add Money to Goal", use_container_width=True, type="primary")
+                with cb2:
+                    cancelled_contrib = st.form_submit_button("✖ Cancel", use_container_width=True)
+                    if cancelled_contrib:
+                        st.session_state.goal_form_mode = None
+                        st.session_state.goal_contrib_id = None
+                        st.rerun()
+
+                if submitted_contrib:
+                    if contrib_amt <= 0:
+                        st.error("⚠️ Contribution amount must be greater than ₹0.")
+                    elif contrib_amt > available_bal:
+                        st.error(f"⚠️ Contribution cannot exceed your available wallet balance ({format_currency(available_bal)}).")
+                    elif max_contrib > 0 and contrib_amt > max_contrib:
+                        st.error(f"⚠️ This would exceed the goal target. Remaining to reach target: {format_currency(max_contrib)}.")
+                    else:
+                        ok = add_goal_contribution(
+                            goal_id=contrib_goal["id"],
+                            user_id=user_id,
+                            amount=float(contrib_amt),
+                            source=source_sel,
+                            transaction_date=contrib_date.strftime("%Y-%m-%d"),
+                            note=contrib_note
+                        )
+                        if ok:
+                            updated_saved = float(contrib_goal["saved_amount"]) + contrib_amt
+                            reached = updated_saved >= float(contrib_goal["target_amount"])
+                            new_progress = min(100.0, (updated_saved / float(contrib_goal["target_amount"])) * 100)
+                            st.success(f"✅ Added {format_currency(contrib_amt)} to '{contrib_goal['name']}'! Updated progress: {new_progress:.0f}%")
+                            if reached:
+                                st.balloons()
+                                st.markdown("<div class='goal-completed-flag'>✓ 🎉 Goal Completed — You reached your goal!</div>", unsafe_allow_html=True)
+                            st.session_state.goal_form_mode = None
+                            st.session_state.goal_contrib_id = None
+                            st.rerun()
+                        else:
+                            st.error("⚠️ Could not add money. Please check your wallet balance.")
+            st.markdown("</div>", unsafe_allow_html=True)
+
+    # ---------------- Edit Goal Modal/Form ----------------
+    if st.session_state.get("goal_edit_id"):
+        edit_goal = get_goal(st.session_state["goal_edit_id"])
+        if edit_goal:
+            st.markdown("<div class='form-card'>", unsafe_allow_html=True)
+            st.markdown(f"<h3 style='margin-bottom: 12px; color: #123C35; font-weight: 800;'>✏️ Edit Goal — <span style='color:#14201B;'>{edit_goal['name']}</span></h3>", unsafe_allow_html=True)
+            st.markdown(f"<p style='color:#42504A; font-weight:600;'>Currently saved: <b style='color:#14201B;'>{format_currency(edit_goal['saved_amount'])}</b>. If you lower the target below your saved amount, the goal auto-completes.</p>", unsafe_allow_html=True)
+            with st.form("edit_goal_form"):
+                e_col1, e_col2 = st.columns(2)
+                with e_col1:
+                    e_name = st.text_input("Goal Name *", value=edit_goal["name"])
+                    e_target = st.number_input("Target Amount (₹) *", min_value=0.0, value=float(edit_goal["target_amount"]), step=500.0, format="%.2f")
+                    cat_opts_e = [f"{get_goal_category_icon(c)} {c}" for c in GOAL_CATEGORIES]
+                    e_cat_fmt = st.selectbox("Category *", cat_opts_e, index=GOAL_CATEGORIES.index(edit_goal["category"]) if edit_goal["category"] in GOAL_CATEGORIES else 0)
+                    e_category = e_cat_fmt.split(" ", 1)[1]
+                with e_col2:
+                    e_priority = st.selectbox("Priority *", GOAL_PRIORITIES, index=GOAL_PRIORITIES.index(edit_goal["priority"]) if edit_goal["priority"] in GOAL_PRIORITIES else 1)
+                    e_date = st.date_input("Target Date (Optional)", value=datetime.datetime.strptime(edit_goal["target_date"], "%Y-%m-%d").date() if edit_goal["target_date"] else None)
+                    e_desc = st.text_area("Description / Notes", value=edit_goal["description"] or "", height=90)
+                e_date_str = e_date.strftime("%Y-%m-%d") if e_date else None
+
+                eb1, eb2 = st.columns(2)
+                with eb1:
+                    submitted_edit = st.form_submit_button("✓ Save Changes", use_container_width=True, type="primary")
+                with eb2:
+                    cancelled_edit = st.form_submit_button("✖ Cancel", use_container_width=True)
+                    if cancelled_edit:
+                        st.session_state.goal_edit_id = None
+                        st.rerun()
+
+                if submitted_edit:
+                    if not e_name.strip():
+                        st.error("⚠️ Goal name cannot be empty.")
+                    elif e_target <= 0:
+                        st.error("⚠️ Target amount must be greater than ₹0.")
+                    else:
+                        update_goal(
+                            goal_id=edit_goal["id"],
+                            name=e_name,
+                            target_amount=float(e_target),
+                            category=e_category,
+                            priority=e_priority,
+                            target_date=e_date_str,
+                            description=e_desc
+                        )
+                        st.success("✅ Goal updated!")
+                        st.session_state.goal_edit_id = None
+                        st.rerun()
+            st.markdown("</div>", unsafe_allow_html=True)
+
+    # ---------------- Delete Confirmation ----------------
+    if st.session_state.get("goal_delete_id"):
+        del_goal = get_goal(st.session_state["goal_delete_id"])
+        if del_goal:
+            saved_del = float(del_goal["saved_amount"])
+            st.markdown("<div class='form-card'>", unsafe_allow_html=True)
+            st.markdown(f"<h3 style='margin-bottom: 12px; color: #AE221A; font-weight: 800;'>🗑️ Delete Goal?</h3>", unsafe_allow_html=True)
+            if saved_del > 0:
+                st.markdown(f"<p style='color:#14201B; font-weight:500;'>This goal has <b>{format_currency(saved_del)}</b> saved. Deleting it will <b>return this amount to your wallet balance</b>. No money will be lost.</p>", unsafe_allow_html=True)
+            else:
+                st.markdown("<p style='color:#14201B; font-weight:500;'>This goal has no saved amount. Deleting it will remove the goal permanently.</p>", unsafe_allow_html=True)
+            d1, d2 = st.columns(2)
+            with d1:
+                if st.button("🗑️ Yes, Delete Goal", use_container_width=True):
+                    result = delete_goal(del_goal["id"], user_id)
+                    if result["saved_amount"] > 0:
+                        adjust_wallet_balance(result["saved_amount"])
+                        st.success(f"✅ Deleted '{del_goal['name']}'. {format_currency(result['saved_amount'])} returned to your wallet.")
+                    else:
+                        st.success(f"✅ Deleted goal '{del_goal['name']}'.")
+                    st.session_state.goal_delete_id = None
+                    st.rerun()
+            with d2:
+                if st.button("Cancel", use_container_width=True):
+                    st.session_state.goal_delete_id = None
+                    st.rerun()
+            st.markdown("</div>", unsafe_allow_html=True)
+
+    # ---------------- Goal Insights ----------------
+    if goals:
+        insights = generate_goal_insights(goals)
+        if insights:
+            st.markdown("---")
+            st.markdown("<h2 style='font-size: 1.45rem; font-weight: 800; color: #14201B; margin-top: 10px; margin-bottom: 14px; letter-spacing: -0.2px;'>💡 Goal Insights</h2>", unsafe_allow_html=True)
+            for insight in insights:
+                st.markdown(f"<div class='insight-card'><div class='insight-text'>{insight}</div></div>", unsafe_allow_html=True)
+
+        # --- Achievements: Completed Goals History ---
+        completed_goals = [g for g in goals if g["status"] == "Completed"]
+        if completed_goals:
+            st.markdown("---")
+            st.markdown("<h2 style='font-size: 1.45rem; font-weight: 800; color: #14201B; margin-top: 10px; margin-bottom: 14px; letter-spacing: -0.2px;'>🏆 Achievements</h2>", unsafe_allow_html=True)
+            for g in completed_goals:
+                gc_icon = get_goal_category_icon(g["category"])
+                st.markdown(f"""
+                <div class="activity-row" style="background: linear-gradient(140deg, #EDF8F1 0%, #FFFDF8 100%); border-color: #A9D6BE;">
+                    <div class="activity-left">
+                        <div class="activity-icon" style="background: #D9F1E3; color: #0F6F42; font-size:1.2rem;">{gc_icon}</div>
+                        <div>
+                            <div class="activity-desc" style="color: #0F6F42;">✓ {g['name']}</div>
+                            <div class="activity-meta" style="color:#42504A;">{g['category']} · Saved {format_currency(g['saved_amount'])} of {format_currency(g['target_amount'])}</div>
+                        </div>
+                    </div>
+                    <div style="text-align:right;">
+                        <div style="font-weight:800; color:#0F6F42; font-size:1rem;">Done</div>
+                    </div>
+                </div>""", unsafe_allow_html=True)
+
+# ----------------------------------------------------
 # PAGE 4: WALLET PAGE REDESIGN
 # ----------------------------------------------------
 elif nav_choice == "💳 Wallet":
@@ -429,12 +964,14 @@ elif nav_choice == "💳 Wallet":
     st.markdown("<p style='color: #5C6660; font-size: 1.1rem; font-weight: 500; margin-bottom: 28px;'>Manage your money in one place.</p>", unsafe_allow_html=True)
 
     summary = get_wallet_summary()
-    render_hero_balance(format_currency(summary["available_wallet"]), subtext="Liquid Cash & Bank Funds")
+    wallet_user = get_current_user_id()
+    goals_allocated = get_total_allocated_to_goals(wallet_user)
+    render_hero_balance(format_currency(summary["available_wallet"]), subtext=f"Available after {format_currency(goals_allocated)} allocated to goals")
 
-    # 13. Three Financial Section Metric Tiles
+    # Financial Section Metric Tiles
     w1, w2, w3 = st.columns(3)
     with w1:
-        render_metric_tile("Add Money", "Wallet Top-up", "Income, allowance, or gifts", icon="💵")
+        render_metric_tile("🎯 Goals", format_currency(goals_allocated), "Allocated for goals", icon="🎯")
     with w2:
         render_metric_tile("Money to Receive", format_currency(summary["money_to_receive"]), "Track money owed to you", icon="📥")
     with w3:
@@ -443,12 +980,13 @@ elif nav_choice == "💳 Wallet":
     st.write("")
     st.markdown("<h2 style='font-size: 1.45rem; font-weight: 800; color: #0B2920; margin-bottom: 14px; letter-spacing: -0.2px;'>⚡ Wallet Actions</h2>", unsafe_allow_html=True)
 
-    tab_add, tab_lend, tab_borrow, tab_receive, tab_repay = st.tabs([
+    tab_add, tab_lend, tab_borrow, tab_receive, tab_repay, tab_alloc = st.tabs([
         "➕ Add Money",
         "↗️ Lend Money",
         "↙️ Borrow Money",
         "✓ Record Money Received",
-        "💳 Repay Borrowed Money"
+        "💳 Repay Borrowed Money",
+        "🎯 Allocate to Goal"
     ])
 
     # Action 1: Add Money
@@ -620,6 +1158,53 @@ elif nav_choice == "💳 Wallet":
                         )
                         st.success(f"✅ Recorded {format_currency(repay_amt)} repaid to {selected_borrow['person']}!")
                         st.rerun()
+
+    # Action 6: Allocate to Goal
+    with tab_alloc:
+        st.caption("Move money from your wallet toward a goal. This reduces your available balance and increases the goal's saved amount — no double counting.")
+        alloc_user = get_current_user_id()
+        alloc_goals = [g for g in get_user_goals(alloc_user) if g["status"] == "Active"]
+        avail_now = get_wallet_balance()
+        if not alloc_goals:
+            st.info("No active goals available. Create a goal from the 🎯 Bucket List page first.")
+        else:
+            goal_options = {f"{get_goal_category_icon(g['category'])} {g['name']} — {format_currency(g['saved_amount'])} / {format_currency(g['target_amount'])}": g for g in alloc_goals}
+            sel_goal_label = st.selectbox("Select Goal *", list(goal_options.keys()), key="alloc_goal_sel")
+            sel_goal = goal_options[sel_goal_label]
+            max_to_alloc = min(float(avail_now), float(sel_goal["target_amount"]) - float(sel_goal["saved_amount"]))
+            with st.form("allocate_goal_form"):
+                al_c1, al_c2 = st.columns(2)
+                with al_c1:
+                    alloc_amt = st.number_input("Amount (₹) *", min_value=0.0, step=100.0, format="%.2f", key="alloc_amt")
+                with al_c2:
+                    alloc_date = st.date_input("Date *", value=datetime.date.today(), key="alloc_date")
+                alloc_note = st.text_input("Note (Optional)", placeholder="e.g. Monthly savings", key="alloc_note")
+                st.caption(f"Wallet available: {format_currency(avail_now)}")
+                submit_alloc = st.form_submit_button("Allocate to Goal", use_container_width=True)
+                if submit_alloc:
+                    if alloc_amt <= 0:
+                        st.error("⚠️ Amount must be greater than zero.")
+                    elif alloc_amt > avail_now:
+                        st.error(f"⚠️ Amount cannot exceed your available wallet balance ({format_currency(avail_now)}).")
+                    elif max_to_alloc > 0 and alloc_amt > max_to_alloc:
+                        st.error(f"⚠️ This would exceed the goal target. Remaining to reach target: {format_currency(max_to_alloc)}.")
+                    else:
+                        ok = add_goal_contribution(
+                            goal_id=sel_goal["id"],
+                            user_id=alloc_user,
+                            amount=float(alloc_amt),
+                            source="Wallet",
+                            transaction_date=alloc_date.strftime("%Y-%m-%d"),
+                            note=alloc_note
+                        )
+                        if ok:
+                            st.success(f"✅ Allocated {format_currency(alloc_amt)} to '{sel_goal['name']}'. Wallet balance updated.")
+                            if float(sel_goal["saved_amount"]) + alloc_amt >= float(sel_goal["target_amount"]):
+                                st.balloons()
+                                st.markdown("<div class='goal-completed-flag'>🎉 Goal Completed! You reached your goal!</div>", unsafe_allow_html=True)
+                            st.rerun()
+                        else:
+                            st.error("⚠️ Could not allocate. Please check your wallet balance.")
 
     # Active Loans Management Sections
     st.markdown("---")

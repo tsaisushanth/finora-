@@ -36,6 +36,22 @@ MONEY_SOURCES = [
     "Other"
 ]
 
+# Goal configuration constants
+GOAL_CATEGORIES = [
+    "Electronics",
+    "Travel",
+    "Education",
+    "Shopping",
+    "Entertainment",
+    "Personal",
+    "Emergency",
+    "Other"
+]
+
+GOAL_PRIORITIES = ["High", "Medium", "Low"]
+
+GOAL_STATUSES = ["Active", "Completed", "Paused", "Archived"]
+
 def get_db_connection():
     """Ensure data directory exists and return SQLite connection."""
     if not os.path.exists(DB_DIR):
@@ -115,11 +131,122 @@ def init_db():
         );
     """)
     
+    # 6. Users Table (for future multi-user support)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL UNIQUE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
+    
+    # 7. Goals (Bucket List) Table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS goals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            target_amount REAL NOT NULL,
+            saved_amount REAL NOT NULL DEFAULT 0,
+            category TEXT NOT NULL DEFAULT 'Other',
+            priority TEXT NOT NULL DEFAULT 'Medium',
+            target_date TEXT,
+            description TEXT,
+            status TEXT NOT NULL DEFAULT 'Active',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        );
+    """)
+    
+    # 8. Goal Transactions Table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS goal_transactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            goal_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            amount REAL NOT NULL,
+            transaction_type TEXT NOT NULL,  -- 'contribution', 'removal'
+            source TEXT,
+            note TEXT,
+            transaction_date TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (goal_id) REFERENCES goals(id),
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        );
+    """)
+    
     # Initialize default wallet_balance if missing
     cursor.execute("SELECT value FROM settings WHERE key = 'wallet_balance'")
     if cursor.fetchone() is None:
         cursor.execute("INSERT INTO settings (key, value) VALUES ('wallet_balance', '0.0')")
+    
+    # Create default user if no users exist and set as current user
+    cursor.execute("SELECT COUNT(*) AS cnt FROM users")
+    if cursor.fetchone()["cnt"] == 0:
+        cursor.execute("INSERT INTO users (username) VALUES (?)", ("Default User",))
+        default_user_id = cursor.lastrowid
+        cursor.execute(
+            "INSERT INTO settings (key, value) VALUES ('current_user_id', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (str(default_user_id),)
+        )
+    else:
+        cursor.execute("SELECT value FROM settings WHERE key = 'current_user_id'")
+        if cursor.fetchone() is None:
+            cursor.execute("SELECT id FROM users ORDER BY id LIMIT 1")
+            first_user = cursor.fetchone()
+            cursor.execute(
+                "INSERT INTO settings (key, value) VALUES ('current_user_id', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (str(first_user["id"]),)
+            )
         
+    conn.commit()
+    conn.close()
+
+
+# =====================================================================
+# USER SYSTEM (for future multi-user support)
+# =====================================================================
+
+def get_current_user_id() -> int:
+    """Return the ID of the currently active user. Falls back to default user."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT value FROM settings WHERE key = 'current_user_id'")
+    row = cursor.fetchone()
+    if row and row["value"]:
+        try:
+            uid = int(row["value"])
+        except ValueError:
+            uid = None
+    else:
+        uid = None
+    
+    if uid is None:
+        cursor.execute("SELECT id FROM users ORDER BY id LIMIT 1")
+        first = cursor.fetchone()
+        uid = first["id"] if first else None
+        if uid is not None:
+            cursor.execute(
+                "INSERT INTO settings (key, value) VALUES ('current_user_id', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (str(uid),)
+            )
+            conn.commit()
+    conn.close()
+    return uid if uid is not None else 1
+
+def set_current_user(user_id: int):
+    """Switch the active user (for multi-user support)."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO settings (key, value) VALUES ('current_user_id', ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (str(user_id),)
+    )
     conn.commit()
     conn.close()
 
@@ -538,3 +665,324 @@ def get_wallet_transaction_history(
     rows = cursor.fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+# =====================================================================
+# BUCKET LIST (GOALS) LOGIC
+# =====================================================================
+
+def create_goal(
+    user_id: int,
+    name: str,
+    target_amount: float,
+    category: str = "Other",
+    priority: str = "Medium",
+    target_date: Optional[str] = None,
+    description: str = ""
+) -> int:
+    """Create a new financial goal for a user. Returns the new goal id."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO goals (user_id, name, target_amount, saved_amount, category, priority, target_date, description, status)
+        VALUES (?, ?, ?, 0, ?, ?, ?, ?, 'Active')
+    """, (
+        user_id,
+        name.strip(),
+        round(target_amount, 2),
+        category,
+        priority,
+        target_date if target_date else None,
+        description.strip() if description else ""
+    ))
+    goal_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return goal_id
+
+
+def get_user_goals(
+    user_id: int,
+    status: Optional[str] = None,
+    category: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """Retrieve all goals belonging to a specific user, newest first."""
+    query = "SELECT * FROM goals WHERE user_id = ?"
+    params: List[Any] = [user_id]
+    
+    if status and status != "All":
+        query += " AND status = ?"
+        params.append(status)
+    if category and category != "All":
+        query += " AND category = ?"
+        params.append(category)
+        
+    query += " ORDER BY created_at DESC, id DESC"
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(query, params)
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_goal(goal_id: int) -> Optional[Dict[str, Any]]:
+    """Retrieve a single goal by its id."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM goals WHERE id = ?", (goal_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def update_goal(
+    goal_id: int,
+    name: str,
+    target_amount: float,
+    category: str,
+    priority: str,
+    target_date: Optional[str],
+    description: str
+) -> bool:
+    """
+    Update a goal's editable fields. If saved_amount now equals or exceeds the new
+    target, the goal is automatically marked Completed (rather than creating invalid
+    saved > target data).
+    """
+    goal = get_goal(goal_id)
+    if not goal:
+        return False
+    
+    saved = float(goal.get("saved_amount", 0.0))
+    status = goal.get("status", "Active")
+    
+    if target_amount <= 0:
+        return False
+    
+    if saved >= target_amount:
+        status = "Completed"
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE goals
+        SET name = ?, target_amount = ?, category = ?, priority = ?, target_date = ?, description = ?, status = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+    """, (
+        name.strip(),
+        round(target_amount, 2),
+        category,
+        priority,
+        target_date if target_date else None,
+        description.strip() if description else "",
+        status,
+        goal_id
+    ))
+    conn.commit()
+    conn.close()
+    return True
+
+
+def delete_goal(goal_id: int, user_id: int) -> Dict[str, Any]:
+    """
+    Delete a goal and return its saved amount so the caller can restore it to the
+    wallet. The saved amount is NOT silently lost — it is returned to the wallet.
+    Returns dict with 'saved_amount' and 'name'.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT name, saved_amount FROM goals WHERE id = ? AND user_id = ?", (goal_id, user_id))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        return {"saved_amount": 0.0, "name": None}
+    
+    name = row["name"]
+    saved_amount = float(row["saved_amount"])
+    
+    cursor.execute("DELETE FROM goal_transactions WHERE goal_id = ?", (goal_id,))
+    cursor.execute("DELETE FROM goals WHERE id = ?", (goal_id,))
+    
+    # Also remove the corresponding wallet transactions for this goal's contributions
+    cursor.execute(
+        "DELETE FROM wallet_transactions WHERE type IN ('goal_allocation', 'goal_removal') AND reference_id = ?",
+        (goal_id,)
+    )
+    
+    conn.commit()
+    conn.close()
+    return {"saved_amount": saved_amount, "name": name}
+
+
+def _update_goal_saved_amount(goal_id: int, new_saved: float, new_status: str):
+    """Internal helper to update a goal's saved_amount and status."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE goals
+        SET saved_amount = ?, status = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+    """, (round(new_saved, 2), new_status, goal_id))
+    conn.commit()
+    conn.close()
+
+
+def update_goal_status(goal_id: int, new_status: str) -> bool:
+    """Set a goal's status directly (e.g. Pause, Resume, Complete, Archive)."""
+    valid = {"Active", "Paused", "Completed", "Archived"}
+    if new_status not in valid:
+        return False
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE goals
+        SET status = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+    """, (new_status, goal_id))
+    conn.commit()
+    conn.close()
+    return True
+
+
+def add_goal_contribution(
+    goal_id: int,
+    user_id: int,
+    amount: float,
+    source: str,
+    transaction_date: str,
+    note: str
+) -> bool:
+    """
+    Add money toward a goal. Deducts from the available wallet balance, increases
+    the goal's saved_amount, records a goal_transaction, and logs a wallet transaction.
+    Returns True on success, False if invalid (e.g. not enough wallet balance).
+    """
+    goal = get_goal(goal_id)
+    if not goal or int(goal.get("user_id", 0)) != user_id:
+        return False
+    
+    if amount <= 0:
+        return False
+    
+    saved = float(goal.get("saved_amount", 0.0))
+    target = float(goal.get("target_amount", 0.0))
+    
+    available = get_wallet_balance()
+    
+    # The contribution comes from the wallet, so it must not exceed available balance.
+    if available < amount:
+        return False
+    
+    new_saved = saved + amount
+    status = goal.get("status", "Active")
+    if new_saved >= target:
+        new_saved = target  # do not exceed target
+        status = "Completed"
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # Record goal transaction
+    cursor.execute("""
+        INSERT INTO goal_transactions (goal_id, user_id, amount, transaction_type, source, note, transaction_date)
+        VALUES (?, ?, ?, 'contribution', ?, ?, ?)
+    """, (goal_id, user_id, round(amount, 2), source, note.strip() if note else "", transaction_date))
+    
+    # Log wallet transaction (deduct from wallet)
+    cursor.execute("""
+        INSERT INTO wallet_transactions (type, amount, transaction_date, source_or_person, note, reference_id)
+        VALUES ('goal_allocation', ?, ?, ?, ?, ?)
+    """, (round(amount, 2), transaction_date, f"Goal: {goal['name']}", note.strip() if note else f"Saved toward {goal['name']}", goal_id))
+    
+    conn.commit()
+    conn.close()
+    
+    # Update wallet (decrease) and goal saved amount
+    adjust_wallet_balance(-amount)
+    _update_goal_saved_amount(goal_id, new_saved, status)
+    
+    return True
+
+
+def remove_goal_contribution(
+    goal_id: int,
+    user_id: int,
+    transaction_id: int
+) -> bool:
+    """
+    Reverse/remove a single goal contribution. Returns the amount to the wallet,
+    decreases the goal's saved_amount, marks the goal as Active if it was Completed
+    and now falls below target. Returns True on success.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT * FROM goal_transactions WHERE id = ? AND goal_id = ? AND user_id = ? AND transaction_type = 'contribution'",
+        (transaction_id, goal_id, user_id)
+    )
+    tx = cursor.fetchone()
+    if not tx:
+        conn.close()
+        return False
+    
+    goal = get_goal(goal_id)
+    if not goal:
+        conn.close()
+        return False
+    
+    amount = float(tx["amount"])
+    saved = float(goal.get("saved_amount", 0.0))
+    target = float(goal.get("target_amount", 0.0))
+    
+    new_saved = max(0.0, saved - amount)
+    
+    # Delete the contribution transaction
+    cursor.execute("DELETE FROM goal_transactions WHERE id = ?", (transaction_id,))
+    
+    # Log a wallet transaction representing the reversal (money returned to wallet)
+    cursor.execute("""
+        INSERT INTO wallet_transactions (type, amount, transaction_date, source_or_person, note, reference_id)
+        VALUES ('goal_removal', ?, ?, ?, ?, ?)
+    """, (round(amount, 2), tx["transaction_date"], f"Goal: {goal['name']}", f"Reversed contribution to {goal['name']}", goal_id))
+    
+    conn.commit()
+    conn.close()
+    
+    # Return money to wallet and update goal
+    adjust_wallet_balance(amount)
+    status = goal.get("status", "Active")
+    if status == "Completed" and new_saved < target:
+        status = "Active"
+    _update_goal_saved_amount(goal_id, new_saved, status)
+    
+    return True
+
+
+def get_goal_transactions(goal_id: int) -> List[Dict[str, Any]]:
+    """Retrieve the contribution history for a specific goal, newest first."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, goal_id, user_id, amount, transaction_type, source, note, transaction_date, created_at
+        FROM goal_transactions
+        WHERE goal_id = ?
+        ORDER BY transaction_date DESC, id DESC
+    """, (goal_id,))
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_total_allocated_to_goals(user_id: int) -> float:
+    """Sum of all saved amounts across a user's non-archived goals."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT SUM(saved_amount) AS total FROM goals WHERE user_id = ? AND status != 'Archived'",
+        (user_id,)
+    )
+    row = cursor.fetchone()
+    conn.close()
+    return float(row["total"]) if row and row["total"] is not None else 0.0
