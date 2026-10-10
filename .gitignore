@@ -1,39 +1,44 @@
-# ─── Python ───────────────────────────────────────────────────────────────────
-__pycache__/
-*.py[cod]
-*$py.class
-*.pyo
-*.pyd
+# ─── Node / Next.js ───────────────────────────────────────────────────────────
+/node_modules
+/.pnp
+.pnp.*
+/.next/
+/out/
+/build
+next-env.d.ts
+*.tsbuildinfo
 
-# ─── Virtual environments ─────────────────────────────────────────────────────
-.venv/
-venv/
-env/
-ENV/
+# ─── Testing ──────────────────────────────────────────────────────────────────
+/coverage
+/test-results
+/playwright-report
+/blob-report
+/playwright/.cache
 
-# ─── Secrets / credentials ────────────────────────────────────────────────────
-.env
-.env.*
-*.env
+# ─── Env / secrets ────────────────────────────────────────────────────────────
+.env*
+!.env.example
 *.pem
 *.key
 *.p12
 *.pfx
 secrets.json
 credentials.json
-firebase*.json
 serviceAccount*.json
-*secret*
-*password*
-*api_key*
 
-# ─── Database / user data ─────────────────────────────────────────────────────
-data/
+# ─── Python (legacy/) ─────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+legacy/data/
 *.db
 *.sqlite
 *.sqlite3
 
-# ─── OS & editor noise ────────────────────────────────────────────────────────
+# ─── OS / editor / logs ───────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
 desktop.ini
@@ -41,17 +46,10 @@ desktop.ini
 .vscode/
 *.swp
 *.swo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
 
-# ─── Build / cache ────────────────────────────────────────────────────────────
-dist/
-build/
-*.egg-info/
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-htmlcov/
-.coverage
-coverage.xml
-
-# ─── Node (in case any tooling is added later) ────────────────────────────────
-node_modules/
+# ─── Vercel ───────────────────────────────────────────────────────────────────
+.vercel
