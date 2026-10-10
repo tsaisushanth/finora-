@@ -5,8 +5,10 @@ import { Brand } from "@/components/brand";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
 import { useQuickAdd } from "@/components/shell/quick-add";
+import { UserMenu } from "@/components/shell/user-menu";
+import type { ShellUser } from "@/components/shell/app-shell";
 
-export function TopBar() {
+export function TopBar({ user }: { user: ShellUser }) {
   const { setOpen } = useQuickAdd();
 
   return (
@@ -24,6 +26,11 @@ export function TopBar() {
         Add
       </Button>
       <ThemeToggle />
+      <UserMenu
+        name={user.name}
+        email={user.email}
+        avatarUrl={user.avatarUrl}
+      />
     </header>
   );
 }

@@ -4,6 +4,10 @@ import { Providers } from "@/components/providers";
 import { appName } from "@/lib/nav";
 import "./globals.css";
 
+// Finora is fully dynamic (auth-gated, per-user data). Allow blocking render
+// instead of requiring Suspense boundaries around every auth/data access.
+export const instant = false;
+
 const geistSans = Geist({
   variable: "--font-geist-sans",
   subsets: ["latin"],

@@ -6,7 +6,19 @@ import { BottomNav } from "@/components/shell/bottom-nav";
 import { QuickAddProvider } from "@/components/shell/quick-add";
 import { TopBar } from "@/components/shell/top-bar";
 
-export function AppShell({ children }: { children: ReactNode }) {
+export type ShellUser = {
+  name: string;
+  email: string;
+  avatarUrl: string | null;
+};
+
+export function AppShell({
+  user,
+  children,
+}: {
+  user: ShellUser;
+  children: ReactNode;
+}) {
   return (
     <QuickAddProvider>
       <div className="min-h-dvh">
@@ -14,7 +26,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           <AppSidebar />
         </aside>
         <div className="md:pl-64">
-          <TopBar />
+          <TopBar user={user} />
           <main className="mx-auto w-full max-w-5xl px-4 pb-28 pt-6 md:px-6 md:pb-14">
             {children}
           </main>

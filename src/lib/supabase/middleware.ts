@@ -1,12 +1,21 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
+import type { User } from "@supabase/supabase-js";
 import { getPublicEnv } from "@/lib/env";
+
+export type SessionResult = {
+  response: NextResponse;
+  user: User | null;
+};
 
 /**
  * Refreshes Supabase auth cookies for every request.
- * Returns a (possibly new) response with the refreshed cookies set.
+ * Returns the (possibly new) response plus the current user so callers can
+ * make redirect decisions, and copies refreshed cookies onto any replacement.
  */
-export async function updateSession(request: NextRequest) {
+export async function updateSession(
+  request: NextRequest,
+): Promise<SessionResult> {
   let response = NextResponse.next({ request });
   const { NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY } =
     getPublicEnv();
@@ -32,7 +41,9 @@ export async function updateSession(request: NextRequest) {
     },
   );
 
-  await supabase.auth.getUser();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
 
-  return response;
+  return { response, user };
 }
