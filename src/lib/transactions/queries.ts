@@ -219,6 +219,58 @@ export const WALLET_TYPE_LABELS: Record<string, string> = {
   adjustment: "Adjustment",
 };
 
+/** Aggregate a user's full ledger into the summary stats used by wallet + dashboard. */
+export function computeWalletStats(
+  allEntries: { type: string; amount: number }[],
+): WalletStats {
+  const stats: WalletStats = {
+    addedPaise: 0,
+    movedOutPaise: 0,
+    inGoalsPaise: 0,
+    lentOutstandingPaise: 0,
+    borrowedOutstandingPaise: 0,
+  };
+  for (const entry of allEntries) {
+    const amountPaise = numericToPaise(entry.amount);
+    if (amountPaise > 0) stats.addedPaise += amountPaise;
+    else stats.movedOutPaise += -amountPaise;
+
+    if (entry.type === "goal_contribution") {
+      stats.inGoalsPaise += -amountPaise;
+    } else if (entry.type === "goal_withdrawal") {
+      stats.inGoalsPaise -= amountPaise;
+    } else if (entry.type === "loan_given") {
+      stats.lentOutstandingPaise += -amountPaise;
+    } else if (entry.type === "loan_repayment_received") {
+      stats.lentOutstandingPaise -= amountPaise;
+    } else if (entry.type === "loan_taken") {
+      stats.borrowedOutstandingPaise += amountPaise;
+    } else if (entry.type === "loan_repayment_made") {
+      stats.borrowedOutstandingPaise += amountPaise;
+    }
+  }
+  return stats;
+}
+
+/** Lightweight balance + summary stats for the dashboard (no ledger page). */
+export async function getWalletSummary(userId: string) {
+  const supabase = await createClient();
+  const [balanceResult, entriesResult] = await Promise.all([
+    supabase.rpc("wallet_balance"),
+    supabase.from("wallet_entries").select("type, amount").eq("user_id", userId),
+  ]);
+  const { data: balanceValue, error: balanceError } = balanceResult;
+  const { data: allEntries, error: entriesError } = entriesResult;
+  if (balanceError) throw new Error(balanceError.message);
+  if (entriesError) throw new Error(entriesError.message);
+  if (!Array.isArray(allEntries)) throw new Error("Could not read wallet ledger");
+
+  return {
+    balancePaise: numericToPaise(balanceValue),
+    stats: computeWalletStats(allEntries),
+  };
+}
+
 export async function getWalletFeed(userId: string, page: number) {
   const supabase = await createClient();
   const maxPage = Math.max(1, page);
@@ -253,32 +305,7 @@ export async function getWalletFeed(userId: string, page: number) {
   if (allEntriesError) throw new Error(allEntriesError.message);
   if (!Array.isArray(allEntries)) throw new Error("Could not read wallet ledger");
 
-  const stats: WalletStats = {
-    addedPaise: 0,
-    movedOutPaise: 0,
-    inGoalsPaise: 0,
-    lentOutstandingPaise: 0,
-    borrowedOutstandingPaise: 0,
-  };
-  for (const entry of allEntries) {
-    const amountPaise = numericToPaise(entry.amount);
-    if (amountPaise > 0) stats.addedPaise += amountPaise;
-    else stats.movedOutPaise += -amountPaise;
-
-    if (entry.type === "goal_contribution") {
-      stats.inGoalsPaise += -amountPaise;
-    } else if (entry.type === "goal_withdrawal") {
-      stats.inGoalsPaise -= amountPaise;
-    } else if (entry.type === "loan_given") {
-      stats.lentOutstandingPaise += -amountPaise;
-    } else if (entry.type === "loan_repayment_received") {
-      stats.lentOutstandingPaise -= amountPaise;
-    } else if (entry.type === "loan_taken") {
-      stats.borrowedOutstandingPaise += amountPaise;
-    } else if (entry.type === "loan_repayment_made") {
-      stats.borrowedOutstandingPaise += amountPaise;
-    }
-  }
+  const stats = computeWalletStats(allEntries);
 
   const entries: WalletEntry[] = (entriesData ?? []).map((row) => ({
     id: row.id,

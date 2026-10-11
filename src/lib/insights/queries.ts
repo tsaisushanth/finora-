@@ -19,6 +19,12 @@ export type CategorySlice = {
   share: number;
 };
 
+export type DailyPoint = {
+  key: string;
+  label: string;
+  spendPaise: number;
+};
+
 export type InsightsData = {
   currentMonthLabel: string;
   spendPaise: number;
@@ -28,6 +34,7 @@ export type InsightsData = {
   prevMonthSpendPaise: number;
   avgDailySpendPaise: number;
   trend: TrendPoint[];
+  dailyTrend: DailyPoint[];
   topCategories: CategorySlice[];
 };
 
@@ -102,16 +109,19 @@ export async function getInsights(
   let incomePaise = 0;
   let prevMonthSpendPaise = 0;
   const currentByCategory = new Map<string | null, number>();
+  const dayByDate = new Map<string, number>();
 
   for (const row of expenseResult.data ?? []) {
-    const point = trendMap.get(monthKey(new Date(row.occurred_at), timeZone));
+    const ym = monthKey(new Date(row.occurred_at), timeZone);
+    const point = trendMap.get(ym);
     if (!point) continue;
     const paise = numericToPaise(row.amount);
     point.spendPaise += paise;
-    const ym = monthKey(new Date(row.occurred_at), timeZone);
     if (ym === curYm) {
       spendPaise += paise;
       currentByCategory.set(row.category_id, (currentByCategory.get(row.category_id) ?? 0) + paise);
+      const dayKey = formatInTimeZone(new Date(row.occurred_at), timeZone, "yyyy-MM-dd");
+      dayByDate.set(dayKey, (dayByDate.get(dayKey) ?? 0) + paise);
     } else if (ym === prevYm) {
       prevMonthSpendPaise += paise;
     }
@@ -149,6 +159,17 @@ export async function getInsights(
   const dayOfMonth =
     Math.max(1, Number.parseInt(formatInTimeZone(now, timeZone, "d"), 10) || 1);
 
+  const dailyTrend: DailyPoint[] = [];
+  for (let day = 1; day <= dayOfMonth; day++) {
+    const date = new Date(`${curYm}-${String(day).padStart(2, "0")}T12:00:00`);
+    const key = formatInTimeZone(date, timeZone, "yyyy-MM-dd");
+    dailyTrend.push({
+      key,
+      label: formatInTimeZone(date, timeZone, "d MMM"),
+      spendPaise: dayByDate.get(key) ?? 0,
+    });
+  }
+
   return {
     currentMonthLabel: formatInTimeZone(now, timeZone, "MMMM yyyy"),
     spendPaise,
@@ -158,6 +179,7 @@ export async function getInsights(
     prevMonthSpendPaise,
     avgDailySpendPaise: Math.round(spendPaise / dayOfMonth),
     trend,
+    dailyTrend,
     topCategories,
   };
 }
