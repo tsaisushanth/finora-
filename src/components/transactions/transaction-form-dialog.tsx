@@ -193,7 +193,7 @@ export function TransactionFormDialog({
                 name="paymentMethodId"
                 render={({ field }) => (
                   <SelectField
-                    label="Paid by"
+                    label="Paid through"
                     id="expense-payment"
                     value={field.value ?? NONE}
                     onValueChange={field.onChange}

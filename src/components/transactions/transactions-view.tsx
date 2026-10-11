@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import { Download, MoreVertical, Pencil, ReceiptText, Trash2, TrendingUp } from "lucide-react";
@@ -101,11 +101,18 @@ export function TransactionsView({
     setRemoving(new Set());
   }
 
-  const categoryNames = new Map(categories.map((c) => [c.id, c.name]));
-  const categoryColors = new Map(
-    categories.map((c) => [c.id, c.color ?? undefined] as const),
+  const categoryNames = useMemo(
+    () => new Map(categories.map((c) => [c.id, c.name])),
+    [categories],
   );
-  const paymentNames = new Map(paymentMethods.map((p) => [p.id, p.name]));
+  const categoryColors = useMemo(
+    () => new Map(categories.map((c) => [c.id, c.color ?? undefined] as const)),
+    [categories],
+  );
+  const paymentNames = useMemo(
+    () => new Map(paymentMethods.map((p) => [p.id, p.name])),
+    [paymentMethods],
+  );
 
   const filterState: TransactionsFilterState = {
     search: filter.search ?? "",

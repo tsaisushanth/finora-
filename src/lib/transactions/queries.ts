@@ -98,11 +98,6 @@ async function listTransactionFeed(
   }
   if (fromIso) expenseQuery = expenseQuery.gte("occurred_at", fromIso);
   if (toIso) expenseQuery = expenseQuery.lte("occurred_at", toIso);
-  const { data: expenses, error: expenseError } = await expenseQuery.order(
-    "occurred_at",
-    { ascending: false },
-  );
-  if (expenseError) throw new Error(expenseError.message);
 
   let incomeQuery = supabase
     .from("income_entries")
@@ -115,10 +110,15 @@ async function listTransactionFeed(
   }
   if (fromIso) incomeQuery = incomeQuery.gte("occurred_at", fromIso);
   if (toIso) incomeQuery = incomeQuery.lte("occurred_at", toIso);
-  const { data: incomes, error: incomeError } = await incomeQuery.order(
-    "occurred_at",
-    { ascending: false },
-  );
+
+  // Fire both table reads in parallel — the two feeds are independent.
+  const [expenseResult, incomeResult] = await Promise.all([
+    expenseQuery.order("occurred_at", { ascending: false }),
+    incomeQuery.order("occurred_at", { ascending: false }),
+  ]);
+  const { data: expenses, error: expenseError } = expenseResult;
+  const { data: incomes, error: incomeError } = incomeResult;
+  if (expenseError) throw new Error(expenseError.message);
   if (incomeError) throw new Error(incomeError.message);
 
   const items: TransactionItem[] = [
@@ -222,29 +222,35 @@ export const WALLET_TYPE_LABELS: Record<string, string> = {
 export async function getWalletFeed(userId: string, page: number) {
   const supabase = await createClient();
   const maxPage = Math.max(1, page);
-
-  const { data: balanceValue, error: balanceError } =
-    await supabase.rpc("wallet_balance");
-  if (balanceError) throw new Error(balanceError.message);
-
   const start = (maxPage - 1) * WALLET_PAGE_SIZE;
-  const [{ data: entriesData, count: total, error: entriesError }, { data: allEntries }] =
-    await Promise.all([
-      supabase
-        .from("wallet_entries")
-        .select("id, type, amount, occurred_at, note, ref_type, ref_id", {
-          count: "exact",
-        })
-        .eq("user_id", userId)
-        .order("occurred_at", { ascending: false })
-        .order("created_at", { ascending: false })
-        .range(start, start + WALLET_PAGE_SIZE - 1),
-      supabase
-        .from("wallet_entries")
-        .select("type, amount")
-        .eq("user_id", userId),
-    ]);
+
+  // Balance, ledger page and the stats scan are independent — read them in parallel.
+  const [balanceResult, entriesResult, allEntriesResult] = await Promise.all([
+    supabase.rpc("wallet_balance"),
+    supabase
+      .from("wallet_entries")
+      .select("id, type, amount, occurred_at, note, ref_type, ref_id", {
+        count: "exact",
+      })
+      .eq("user_id", userId)
+      .order("occurred_at", { ascending: false })
+      .order("created_at", { ascending: false })
+      .range(start, start + WALLET_PAGE_SIZE - 1),
+    supabase
+      .from("wallet_entries")
+      .select("type, amount")
+      .eq("user_id", userId),
+  ]);
+  const { data: balanceValue, error: balanceError } = balanceResult;
+  const {
+    data: entriesData,
+    count: total,
+    error: entriesError,
+  } = entriesResult;
+  const { data: allEntries, error: allEntriesError } = allEntriesResult;
+  if (balanceError) throw new Error(balanceError.message);
   if (entriesError) throw new Error(entriesError.message);
+  if (allEntriesError) throw new Error(allEntriesError.message);
   if (!Array.isArray(allEntries)) throw new Error("Could not read wallet ledger");
 
   const stats: WalletStats = {
