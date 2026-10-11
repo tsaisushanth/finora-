@@ -2,8 +2,9 @@ import "server-only";
 
 import { createClient as createSupabaseAdmin } from "@supabase/supabase-js";
 import { getPublicEnv, getServerEnv } from "@/lib/env";
+import type { Database } from "@/types/database";
 
-let adminClient: ReturnType<typeof createSupabaseAdmin> | null = null;
+let adminClient: ReturnType<typeof createSupabaseAdmin<Database>> | null = null;
 
 /**
  * Service-role Supabase client. Server-only — never import from client code.
@@ -18,7 +19,7 @@ export function getAdminClient() {
         "SUPABASE_SERVICE_ROLE_KEY is missing. Add it to the server-side environment (.env.local).",
       );
     }
-    adminClient = createSupabaseAdmin(
+    adminClient = createSupabaseAdmin<Database>(
       NEXT_PUBLIC_SUPABASE_URL,
       SUPABASE_SERVICE_ROLE_KEY,
       {
