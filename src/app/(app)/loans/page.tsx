@@ -1,18 +1,25 @@
-﻿import { HandCoins } from "lucide-react";
-import { EmptyState } from "@/components/empty-state";
+﻿import type { Metadata } from "next";
+import { requireOnboardedProfile } from "@/lib/auth/session";
+import { getLoans } from "@/lib/loans/queries";
 import { PageHeader } from "@/components/page-header";
-import type { Metadata } from "next";
+import { LoanLinks } from "@/components/loans/loan-links";
+import { LoansView } from "@/components/loans/loans-view";
 
 export const metadata: Metadata = { title: "Loans" };
 
-const Icon = HandCoins;
+export default async function LoansPage() {
+  const profile = await requireOnboardedProfile();
+  const { loans } = await getLoans(profile.id);
 
-export default function loansPage() {
   return (
     <>
-      <PageHeader title="Loans" description="Money lent to or borrowed from friends, with repayments tracked." />
-      <EmptyState icon={Icon} title="No loans yet" description="Lend / borrow tracking arrives in Phase 5." />
+      <PageHeader
+        title="Loans"
+        description="Money lent to or borrowed from friends, with each repayment tracked against the loan."
+      >
+        <LoanLinks />
+      </PageHeader>
+      <LoansView loans={loans} timezone={profile.timezone} />
     </>
   );
 }
-

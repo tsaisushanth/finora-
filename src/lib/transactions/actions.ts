@@ -5,7 +5,7 @@ import { requireUser, getProfile } from "@/lib/auth/session";
 import { createClient } from "@/lib/supabase/server";
 import { DEFAULT_TIMEZONE } from "@/lib/dates";
 import { datetimeLocalToUtc } from "@/lib/dates";
-import { paiseToNumeric } from "@/lib/money";
+import { firstError, optional, readFormValue, toRpcAmount } from "@/lib/form-action-utils";
 import {
   adjustBalanceInputSchema,
   amountToPaise,
@@ -20,26 +20,10 @@ import {
 
 export type TransactionActionResult = { success?: string; error?: string };
 
-function firstError(error: { issues: { message: string }[] }): string {
-  return error.issues[0]?.message ?? "Please check the form and try again";
-}
-
-function toRpcAmount(paise: number): number {
-  return paiseToNumeric(paise) as unknown as number;
-}
-
-function optional(value: string | undefined): string | undefined {
-  return value && value.trim() !== "" ? value.trim() : undefined;
-}
-
 function touchPages() {
   revalidatePath("/transactions");
   revalidatePath("/wallet");
   revalidatePath("/");
-}
-
-function readAmount(value: FormDataEntryValue | null): string {
-  return typeof value === "string" ? value : "";
 }
 
 export async function createExpenseAction(
@@ -50,12 +34,12 @@ export async function createExpenseAction(
   const timeZone = profile?.timezone ?? DEFAULT_TIMEZONE;
 
   const parsed = expenseInputSchema.safeParse({
-    amount: readAmount(formData.get("amount")),
-    categoryId: readAmount(formData.get("categoryId")),
-    paymentMethodId: readAmount(formData.get("paymentMethodId")),
-    merchant: readAmount(formData.get("merchant")),
-    note: readAmount(formData.get("note")),
-    occurredAt: readAmount(formData.get("occurredAt")),
+    amount: readFormValue(formData.get("amount")),
+    categoryId: readFormValue(formData.get("categoryId")),
+    paymentMethodId: readFormValue(formData.get("paymentMethodId")),
+    merchant: readFormValue(formData.get("merchant")),
+    note: readFormValue(formData.get("note")),
+    occurredAt: readFormValue(formData.get("occurredAt")),
   });
   if (!parsed.success) return { error: firstError(parsed.error) };
   const amountPaise = amountToPaise(parsed.data.amount);
@@ -83,16 +67,16 @@ export async function updateExpenseAction(
   const timeZone = profile?.timezone ?? DEFAULT_TIMEZONE;
 
   const parsed = expenseInputSchema.safeParse({
-    amount: readAmount(formData.get("amount")),
-    categoryId: readAmount(formData.get("categoryId")),
-    paymentMethodId: readAmount(formData.get("paymentMethodId")),
-    merchant: readAmount(formData.get("merchant")),
-    note: readAmount(formData.get("note")),
-    occurredAt: readAmount(formData.get("occurredAt")),
+    amount: readFormValue(formData.get("amount")),
+    categoryId: readFormValue(formData.get("categoryId")),
+    paymentMethodId: readFormValue(formData.get("paymentMethodId")),
+    merchant: readFormValue(formData.get("merchant")),
+    note: readFormValue(formData.get("note")),
+    occurredAt: readFormValue(formData.get("occurredAt")),
   });
   if (!parsed.success) return { error: firstError(parsed.error) };
   const amountPaise = amountToPaise(parsed.data.amount);
-  const id = readAmount(formData.get("id"));
+  const id = readFormValue(formData.get("id"));
   if (!id) return { error: "Missing expense id." };
 
   const supabase = await createClient();
@@ -115,7 +99,7 @@ export async function deleteExpenseAction(
   formData: FormData,
 ): Promise<TransactionActionResult> {
   await requireUser();
-  const id = readAmount(formData.get("id"));
+  const id = readFormValue(formData.get("id"));
   if (!id) return { error: "Missing expense id." };
 
   const supabase = await createClient();
@@ -134,11 +118,11 @@ export async function createIncomeAction(
   const timeZone = profile?.timezone ?? DEFAULT_TIMEZONE;
 
   const parsed = incomeInputSchema.safeParse({
-    amount: readAmount(formData.get("amount")),
-    categoryId: readAmount(formData.get("categoryId")),
-    source: readAmount(formData.get("source")),
-    note: readAmount(formData.get("note")),
-    occurredAt: readAmount(formData.get("occurredAt")),
+    amount: readFormValue(formData.get("amount")),
+    categoryId: readFormValue(formData.get("categoryId")),
+    source: readFormValue(formData.get("source")),
+    note: readFormValue(formData.get("note")),
+    occurredAt: readFormValue(formData.get("occurredAt")),
   });
   if (!parsed.success) return { error: firstError(parsed.error) };
   const amountPaise = amountToPaise(parsed.data.amount);
@@ -161,7 +145,7 @@ export async function deleteIncomeAction(
   formData: FormData,
 ): Promise<TransactionActionResult> {
   await requireUser();
-  const id = readAmount(formData.get("id"));
+  const id = readFormValue(formData.get("id"));
   if (!id) return { error: "Missing income id." };
 
   const supabase = await createClient();
@@ -177,9 +161,9 @@ export async function adjustBalanceAction(
 ): Promise<TransactionActionResult> {
   await requireUser();
   const parsed = adjustBalanceInputSchema.safeParse({
-    amount: readAmount(formData.get("amount")),
-    mode: readAmount(formData.get("mode")) as "add" | "remove",
-    reason: readAmount(formData.get("reason")),
+    amount: readFormValue(formData.get("amount")),
+    mode: readFormValue(formData.get("mode")) as "add" | "remove",
+    reason: readFormValue(formData.get("reason")),
   });
   if (!parsed.success) return { error: firstError(parsed.error) };
 
@@ -206,11 +190,11 @@ export async function exportTransactionsCsvAction(
   const timeZone = profile?.timezone ?? DEFAULT_TIMEZONE;
 
   const parsed = transactionsFilterSchema.safeParse({
-    search: readAmount(formData.get("search")),
-    categoryId: readAmount(formData.get("categoryId")),
-    paymentMethodId: readAmount(formData.get("paymentMethodId")),
-    from: readAmount(formData.get("from")),
-    to: readAmount(formData.get("to")),
+    search: readFormValue(formData.get("search")),
+    categoryId: readFormValue(formData.get("categoryId")),
+    paymentMethodId: readFormValue(formData.get("paymentMethodId")),
+    from: readFormValue(formData.get("from")),
+    to: readFormValue(formData.get("to")),
   });
   if (!parsed.success) return { error: firstError(parsed.error) };
 

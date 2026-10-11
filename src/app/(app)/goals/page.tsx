@@ -1,18 +1,28 @@
-﻿import { Target } from "lucide-react";
-import { EmptyState } from "@/components/empty-state";
+﻿import type { Metadata } from "next";
+import { requireOnboardedProfile } from "@/lib/auth/session";
+import { getGoals, getGoalCategories } from "@/lib/goals/queries";
 import { PageHeader } from "@/components/page-header";
-import type { Metadata } from "next";
+import { GoalLinks } from "@/components/goals/goal-links";
+import { GoalsView } from "@/components/goals/goals-view";
 
 export const metadata: Metadata = { title: "Goals" };
 
-const Icon = Target;
+export default async function GoalsPage() {
+  const profile = await requireOnboardedProfile();
+  const [{ goals }, categories] = await Promise.all([
+    getGoals(profile.id),
+    getGoalCategories(profile.id),
+  ]);
 
-export default function goalsPage() {
   return (
     <>
-      <PageHeader title="Goals" description="Save for the trip, gadget or fund — track progress against what you stash away." />
-      <EmptyState icon={Icon} title="No goals yet" description="Goal creation and progress tracking arrive in Phase 5." />
+      <PageHeader
+        title="Goals"
+        description="Save for the trip, gadget or fund — money you add is tracked against a target, straight from your wallet."
+      >
+        <GoalLinks />
+      </PageHeader>
+      <GoalsView goals={goals} categories={categories} timezone={profile.timezone} />
     </>
   );
 }
-
