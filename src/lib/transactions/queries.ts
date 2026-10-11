@@ -56,100 +56,113 @@ function escapeLike(value: string): string {
   return value.replace(/[\\%_]/g, (match) => `\\${match}`);
 }
 
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
 function dateBounds(
   from: string | undefined,
   to: string | undefined,
   timeZone: string,
 ): { fromIso: string | null; toIso: string | null } {
   return {
-    fromIso: from
+    // Ignore anything that isn't a yyyy-MM-dd date instead of crashing the page.
+    fromIso: from && DATE_RE.test(from)
       ? fromZonedTime(new Date(`${from}T00:00:00`), timeZone).toISOString()
       : null,
-    toIso: to
+    toIso: to && DATE_RE.test(to)
       ? fromZonedTime(new Date(`${to}T23:59:59.999`), timeZone).toISOString()
       : null,
   };
 }
 
+/** Row shape of the `transactions_feed` view (expenses + income_entries). */
+export type FeedRow = {
+  kind: "expense" | "income";
+  id: string;
+  amount: number;
+  category_id: string | null;
+  payment_method_id: string | null;
+  title: string | null;
+  note: string | null;
+  occurred_at: string;
+  created_at: string;
+};
+
+const FEED_COLUMNS =
+  "id, kind, amount, category_id, payment_method_id, title, note, occurred_at, created_at";
+
 /**
- * The combined expense + income feed, newest first. Both tables are small in a
- * personal finance app, so the union happens in TypeScript after filtered reads.
+ * The combined expense + income feed, newest first. Slicing and counting happen
+ * in Postgres through the `transactions_feed` view, so a page of 25 rows never
+ * downloads the whole history (the old union-in-TypeScript approach got slow
+ * and hit PostgREST's 1000-row cap, silently breaking totals).
  */
 async function listTransactionFeed(
   userId: string,
   filters: TransactionFilters,
   timeZone: string,
-): Promise<TransactionItem[]> {
+  range?: { start: number; end: number },
+): Promise<{ items: TransactionItem[]; total: number }> {
   const supabase = await createClient();
   const { search, categoryId, paymentMethodId } = filters;
   const { fromIso, toIso } = dateBounds(filters.from, filters.to, timeZone);
 
-  let expenseQuery = supabase
-    .from("expenses")
-    .select("id, amount, category_id, payment_method_id, merchant, note, occurred_at, created_at")
+  // The view isn't in the generated types yet; the cast only loosens the
+  // compile-time relation name, the runtime string is the real feed view.
+  const feed = supabase.from("transactions_feed" as unknown as "expenses");
+  let countBuilder = feed
+    .select("id", { count: "exact", head: true })
     .eq("user_id", userId);
-  if (categoryId) expenseQuery = expenseQuery.eq("category_id", categoryId);
+  let dataBuilder = feed.select(FEED_COLUMNS).eq("user_id", userId);
+
+  if (categoryId) {
+    countBuilder = countBuilder.eq("category_id", categoryId);
+    dataBuilder = dataBuilder.eq("category_id", categoryId);
+  }
   if (paymentMethodId) {
-    expenseQuery = expenseQuery.eq("payment_method_id", paymentMethodId);
+    countBuilder = countBuilder.eq("payment_method_id", paymentMethodId);
+    dataBuilder = dataBuilder.eq("payment_method_id", paymentMethodId);
   }
   if (search) {
     const term = `%${escapeLike(search)}%`;
-    expenseQuery = expenseQuery.or(`merchant.ilike.${term},note.ilike.${term}`);
+    countBuilder = countBuilder.or(`title.ilike.${term},note.ilike.${term}`);
+    dataBuilder = dataBuilder.or(`title.ilike.${term},note.ilike.${term}`);
   }
-  if (fromIso) expenseQuery = expenseQuery.gte("occurred_at", fromIso);
-  if (toIso) expenseQuery = expenseQuery.lte("occurred_at", toIso);
-
-  let incomeQuery = supabase
-    .from("income_entries")
-    .select("id, amount, category_id, source, note, occurred_at, created_at")
-    .eq("user_id", userId);
-  if (categoryId) incomeQuery = incomeQuery.eq("category_id", categoryId);
-  if (search) {
-    const term = `%${escapeLike(search)}%`;
-    incomeQuery = incomeQuery.or(`source.ilike.${term},note.ilike.${term}`);
+  if (fromIso) {
+    countBuilder = countBuilder.gte("occurred_at", fromIso);
+    dataBuilder = dataBuilder.gte("occurred_at", fromIso);
   }
-  if (fromIso) incomeQuery = incomeQuery.gte("occurred_at", fromIso);
-  if (toIso) incomeQuery = incomeQuery.lte("occurred_at", toIso);
+  if (toIso) {
+    countBuilder = countBuilder.lte("occurred_at", toIso);
+    dataBuilder = dataBuilder.lte("occurred_at", toIso);
+  }
 
-  // Fire both table reads in parallel — the two feeds are independent.
-  const [expenseResult, incomeResult] = await Promise.all([
-    expenseQuery.order("occurred_at", { ascending: false }),
-    incomeQuery.order("occurred_at", { ascending: false }),
-  ]);
-  const { data: expenses, error: expenseError } = expenseResult;
-  const { data: incomes, error: incomeError } = incomeResult;
-  if (expenseError) throw new Error(expenseError.message);
-  if (incomeError) throw new Error(incomeError.message);
+  let dataQuery = dataBuilder
+    .order("occurred_at", { ascending: false })
+    .order("created_at", { ascending: false });
+  if (range) dataQuery = dataQuery.range(range.start, range.end);
 
-  const items: TransactionItem[] = [
-    ...(expenses ?? []).map((row) => ({
-      kind: "expense" as const,
-      id: row.id,
-      amount: row.amount,
-      categoryId: row.category_id,
-      paymentMethodId: row.payment_method_id,
-      title: row.merchant,
-      note: row.note,
-      occurredAt: row.occurred_at,
-      createdAt: row.created_at,
-    })),
-    ...(incomes ?? []).map((row) => ({
-      kind: "income" as const,
-      id: row.id,
-      amount: row.amount,
-      categoryId: row.category_id,
-      paymentMethodId: null,
-      title: row.source,
-      note: row.note,
-      occurredAt: row.occurred_at,
-      createdAt: row.created_at,
-    })),
-  ];
-  items.sort((a, b) => {
-    const byTime = b.occurredAt.localeCompare(a.occurredAt);
-    return byTime !== 0 ? byTime : b.createdAt.localeCompare(a.createdAt);
+  // Fire the count and the page slice in parallel.
+  const [countResult, dataResult] = await Promise.all([countBuilder, dataQuery]);
+  const { count, error: countError } = countResult;
+  const { data, error: dataError } = dataResult;
+  if (countError) throw new Error(countError.message);
+  if (dataError) throw new Error(dataError.message);
+
+  const items: TransactionItem[] = (data ?? []).map((row) => {
+    const feedRow = row as unknown as FeedRow;
+    return {
+      kind: feedRow.kind === "income" ? "income" : "expense",
+      id: feedRow.id,
+      amount: feedRow.amount,
+      categoryId: feedRow.category_id,
+      paymentMethodId: feedRow.payment_method_id,
+      title: feedRow.title,
+      note: feedRow.note,
+      occurredAt: feedRow.occurred_at,
+      createdAt: feedRow.created_at,
+    };
   });
-  return items;
+  return { items, total: count ?? items.length };
 }
 
 export async function listTransactions(
@@ -157,17 +170,15 @@ export async function listTransactions(
   filters: TransactionFilters,
   timeZone: string = DEFAULT_TIMEZONE,
 ) {
-  const all = await listTransactionFeed(userId, filters, timeZone);
-  const total = all.length;
+  const requestedPage = Math.max(1, filters.page ?? 1);
+  const start = (requestedPage - 1) * TRANSACTIONS_PAGE_SIZE;
+  const { items, total } = await listTransactionFeed(userId, filters, timeZone, {
+    start,
+    end: start + TRANSACTIONS_PAGE_SIZE - 1,
+  });
   const pageCount = Math.max(1, Math.ceil(total / TRANSACTIONS_PAGE_SIZE));
-  const page = Math.min(filters.page ?? 1, pageCount);
-  const start = (page - 1) * TRANSACTIONS_PAGE_SIZE;
-  return {
-    items: all.slice(start, start + TRANSACTIONS_PAGE_SIZE),
-    total,
-    page,
-    pageCount,
-  };
+  const page = Math.min(requestedPage, pageCount);
+  return { items, total, page, pageCount };
 }
 
 /** Every matching row, ignoring pagination — used for CSV export. */
@@ -176,7 +187,8 @@ export async function listAllTransactions(
   filters: TransactionFilters,
   timeZone: string = DEFAULT_TIMEZONE,
 ): Promise<TransactionItem[]> {
-  return listTransactionFeed(userId, filters, timeZone);
+  const { items } = await listTransactionFeed(userId, filters, timeZone);
+  return items;
 }
 
 export async function getTransactionOptions(userId: string): Promise<{
@@ -219,56 +231,64 @@ export const WALLET_TYPE_LABELS: Record<string, string> = {
   adjustment: "Adjustment",
 };
 
-/** Aggregate a user's full ledger into the summary stats used by wallet + dashboard. */
-export function computeWalletStats(
-  allEntries: { type: string; amount: number }[],
-): WalletStats {
-  const stats: WalletStats = {
+/** Row shape of the `wallet_stats` aggregate view. */
+export type WalletStatsRow = {
+  user_id: string;
+  added: number;
+  moved_out: number;
+  in_goals: number;
+  lent_outstanding: number;
+  borrowed_outstanding: number;
+};
+
+function emptyStats(): WalletStats {
+  return {
     addedPaise: 0,
     movedOutPaise: 0,
     inGoalsPaise: 0,
     lentOutstandingPaise: 0,
     borrowedOutstandingPaise: 0,
   };
-  for (const entry of allEntries) {
-    const amountPaise = numericToPaise(entry.amount);
-    if (amountPaise > 0) stats.addedPaise += amountPaise;
-    else stats.movedOutPaise += -amountPaise;
+}
 
-    if (entry.type === "goal_contribution") {
-      stats.inGoalsPaise += -amountPaise;
-    } else if (entry.type === "goal_withdrawal") {
-      stats.inGoalsPaise -= amountPaise;
-    } else if (entry.type === "loan_given") {
-      stats.lentOutstandingPaise += -amountPaise;
-    } else if (entry.type === "loan_repayment_received") {
-      stats.lentOutstandingPaise -= amountPaise;
-    } else if (entry.type === "loan_taken") {
-      stats.borrowedOutstandingPaise += amountPaise;
-    } else if (entry.type === "loan_repayment_made") {
-      stats.borrowedOutstandingPaise += amountPaise;
-    }
-  }
-  return stats;
+/**
+ * Summary stats straight from the `wallet_stats` view. Previously every caller
+ * pulled the whole ledger with `select("type, amount")`, which got slow and was
+ * silently truncated at PostgREST's 1000-row cap.
+ */
+async function fetchWalletStats(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  userId: string,
+): Promise<WalletStats> {
+  const view = supabase.from("wallet_stats" as unknown as "wallet_balances");
+  const { data, error } = await view
+    .select(
+      "user_id, added, moved_out, in_goals, lent_outstanding, borrowed_outstanding",
+    )
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  const row = data as unknown as WalletStatsRow | null;
+  if (!row) return emptyStats();
+  return {
+    addedPaise: numericToPaise(row.added),
+    movedOutPaise: numericToPaise(row.moved_out),
+    inGoalsPaise: numericToPaise(row.in_goals),
+    lentOutstandingPaise: numericToPaise(row.lent_outstanding),
+    borrowedOutstandingPaise: numericToPaise(row.borrowed_outstanding),
+  };
 }
 
 /** Lightweight balance + summary stats for the dashboard (no ledger page). */
 export async function getWalletSummary(userId: string) {
   const supabase = await createClient();
-  const [balanceResult, entriesResult] = await Promise.all([
+  const [balanceResult, stats] = await Promise.all([
     supabase.rpc("wallet_balance"),
-    supabase.from("wallet_entries").select("type, amount").eq("user_id", userId),
+    fetchWalletStats(supabase, userId),
   ]);
   const { data: balanceValue, error: balanceError } = balanceResult;
-  const { data: allEntries, error: entriesError } = entriesResult;
   if (balanceError) throw new Error(balanceError.message);
-  if (entriesError) throw new Error(entriesError.message);
-  if (!Array.isArray(allEntries)) throw new Error("Could not read wallet ledger");
-
-  return {
-    balancePaise: numericToPaise(balanceValue),
-    stats: computeWalletStats(allEntries),
-  };
+  return { balancePaise: numericToPaise(balanceValue), stats };
 }
 
 export async function getWalletFeed(userId: string, page: number) {
@@ -276,8 +296,8 @@ export async function getWalletFeed(userId: string, page: number) {
   const maxPage = Math.max(1, page);
   const start = (maxPage - 1) * WALLET_PAGE_SIZE;
 
-  // Balance, ledger page and the stats scan are independent — read them in parallel.
-  const [balanceResult, entriesResult, allEntriesResult] = await Promise.all([
+  // Balance, ledger page and the aggregate stats are independent — read in parallel.
+  const [balanceResult, entriesResult, stats] = await Promise.all([
     supabase.rpc("wallet_balance"),
     supabase
       .from("wallet_entries")
@@ -288,10 +308,7 @@ export async function getWalletFeed(userId: string, page: number) {
       .order("occurred_at", { ascending: false })
       .order("created_at", { ascending: false })
       .range(start, start + WALLET_PAGE_SIZE - 1),
-    supabase
-      .from("wallet_entries")
-      .select("type, amount")
-      .eq("user_id", userId),
+    fetchWalletStats(supabase, userId),
   ]);
   const { data: balanceValue, error: balanceError } = balanceResult;
   const {
@@ -299,13 +316,8 @@ export async function getWalletFeed(userId: string, page: number) {
     count: total,
     error: entriesError,
   } = entriesResult;
-  const { data: allEntries, error: allEntriesError } = allEntriesResult;
   if (balanceError) throw new Error(balanceError.message);
   if (entriesError) throw new Error(entriesError.message);
-  if (allEntriesError) throw new Error(allEntriesError.message);
-  if (!Array.isArray(allEntries)) throw new Error("Could not read wallet ledger");
-
-  const stats = computeWalletStats(allEntries);
 
   const entries: WalletEntry[] = (entriesData ?? []).map((row) => ({
     id: row.id,

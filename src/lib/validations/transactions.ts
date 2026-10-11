@@ -1,5 +1,10 @@
 import { z } from "zod";
-import { moneyInput, occurredAtInput, shortText } from "@/lib/validations/common";
+import {
+  moneyInput,
+  occurredAtInput,
+  optionalDateInput,
+  shortText,
+} from "@/lib/validations/common";
 
 /**
  * Shared form input shapes used by the server actions. Amounts are validated as
@@ -37,8 +42,8 @@ export const transactionsFilterSchema = z.object({
   search: z.string().trim().max(120).optional(),
   categoryId: z.string().optional(),
   paymentMethodId: z.string().optional(),
-  from: z.string().optional(),
-  to: z.string().optional(),
+  from: optionalDateInput,
+  to: optionalDateInput,
   page: z.coerce.number().int().min(1).default(1),
 });
 
