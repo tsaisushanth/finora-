@@ -1,4 +1,4 @@
-import { formatInTimeZone } from "date-fns-tz";
+import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 
 export const DEFAULT_TIMEZONE = "Asia/Kolkata";
 
@@ -21,6 +21,27 @@ export function formatDateTimeInTimeZone(
 /** Today's date (yyyy-MM-dd) as seen in the given timezone. */
 export function todayInTimeZone(timeZone: string = DEFAULT_TIMEZONE): string {
   return formatInTimeZone(new Date(), timeZone, "yyyy-MM-dd");
+}
+
+/** Local wall-clock now (yyyy-MM-ddTHH:mm) in the given timezone, for `<input type="datetime-local">`. */
+export function nowToDatetimeLocal(timeZone: string = DEFAULT_TIMEZONE): string {
+  return formatInTimeZone(new Date(), timeZone, "yyyy-MM-dd'T'HH:mm");
+}
+
+/** Convert a UTC ISO string into an `yyyy-MM-ddTHH:mm` value for `<input type="datetime-local">`. */
+export function toDatetimeLocal(
+  value: string,
+  timeZone: string = DEFAULT_TIMEZONE,
+): string {
+  return formatInTimeZone(new Date(value), timeZone, "yyyy-MM-dd'T'HH:mm");
+}
+
+/** Interpret a datetime-local value as wall time in `timeZone` and return UTC. */
+export function datetimeLocalToUtc(
+  value: string,
+  timeZone: string = DEFAULT_TIMEZONE,
+): string {
+  return fromZonedTime(new Date(value), timeZone).toISOString();
 }
 
 /** A best-effort list of IANA timezones for pickers. */

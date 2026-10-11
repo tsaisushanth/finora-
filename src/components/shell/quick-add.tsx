@@ -46,7 +46,7 @@ function QuickAddSheet() {
         <SheetHeader>
           <SheetTitle>Add something</SheetTitle>
           <SheetDescription>
-            Choose what you want to record. Forms land in the next phases.
+            Choose what you want to record. The entry form opens right after.
           </SheetDescription>
         </SheetHeader>
         <div className="grid gap-2">

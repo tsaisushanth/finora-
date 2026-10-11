@@ -279,6 +279,9 @@ isOneToOne: false
 "delete_goal":
 { Args: { "p_goal_id": string }; Returns: undefined
                            },
+"delete_income":
+{ Args: { "p_id": string }; Returns: undefined
+                           },
 "record_loan":
 { Args: { "p_direction": string,"p_due_date"?: string,"p_note"?: string,"p_occurred_at"?: string,"p_person": string,"p_principal": number }; Returns: string
                            },
