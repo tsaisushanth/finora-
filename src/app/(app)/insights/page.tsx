@@ -1,18 +1,37 @@
-﻿import { ChartPie } from "lucide-react";
-import { EmptyState } from "@/components/empty-state";
+﻿import type { Metadata } from "next";
+import { requireOnboardedProfile } from "@/lib/auth/session";
+import { getInsights, sumMonthGoalContributions } from "@/lib/insights/queries";
+import { getGoals } from "@/lib/goals/queries";
+import { rupeesToPaise } from "@/lib/money";
 import { PageHeader } from "@/components/page-header";
-import type { Metadata } from "next";
+import { InsightsView } from "@/components/insights/insights-view";
 
 export const metadata: Metadata = { title: "Insights" };
 
-const Icon = ChartPie;
+export default async function InsightsPage() {
+  const profile = await requireOnboardedProfile();
+  const budgetPaise = rupeesToPaise(profile.monthly_budget);
 
-export default function insightsPage() {
+  const [insights, goalData] = await Promise.all([
+    getInsights(profile.id, profile.timezone, budgetPaise),
+    getGoals(profile.id),
+  ]);
+  const monthGoalContribPaise = sumMonthGoalContributions(
+    goalData.contributions,
+    profile.timezone,
+  );
+
   return (
     <>
-      <PageHeader title="Insights" description="Spending by category, month-over-month trends and non-essential analysis." />
-      <EmptyState icon={Icon} title="No insights yet" description="Charts and breakdowns land in Phase 6, once there is real data." />
+      <PageHeader
+        title="Insights"
+        description="Spending by category, month-over-month trends and plain-language notes about your money."
+      />
+      <InsightsView
+        data={insights}
+        goals={goalData.goals}
+        monthGoalContribPaise={monthGoalContribPaise}
+      />
     </>
   );
 }
-
